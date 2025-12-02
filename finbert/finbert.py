@@ -13,7 +13,23 @@ from finbert.utils import *
 import numpy as np
 import logging
 
-from transformers.optimization import AdamW, get_linear_schedule_with_warmup
+# Handle API differences across transformers versions.
+try:
+    from transformers import get_linear_schedule_with_warmup
+except ImportError:  # transformers<4.0
+    from transformers.optimization import get_linear_schedule_with_warmup  # type: ignore
+
+try:
+    from transformers import AdamW as HFAdamW
+except ImportError:
+    try:
+        from transformers.optimization import AdamW as HFAdamW  # type: ignore
+    except ImportError:
+        HFAdamW = None
+
+from torch.optim import AdamW as TorchAdamW
+AdamW = HFAdamW or TorchAdamW
+
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
@@ -578,7 +594,7 @@ class FinBert(object):
         return evaluation_df
 
 
-def predict(text, model, write_to_csv=False, path=None, use_gpu=False, gpu_name='cuda:0', batch_size=5):
+def predict(text, model, write_to_csv=False, path=None, use_gpu=False, gpu_name='cuda:0', batch_size=5, retriever=None):
     """
     Predict sentiments of sentences in a given text. The function first tokenizes sentences, make predictions and write
     results.
@@ -597,6 +613,8 @@ def predict(text, model, write_to_csv=False, path=None, use_gpu=False, gpu_name=
         multi-gpu support: allows specifying which gpu to use
     batch_size: (optional): int
         size of batching chunks
+    retriever: (optional): callable
+        A function taking List[str] sentences and returning List[str] contexts (same length).
     """
     model.eval()
 
@@ -608,7 +626,8 @@ def predict(text, model, write_to_csv=False, path=None, use_gpu=False, gpu_name=
     label_dict = {0: 'positive', 1: 'negative', 2: 'neutral'}
     result = pd.DataFrame(columns=['sentence', 'logit', 'prediction', 'sentiment_score'])
     for batch in chunks(sentences, batch_size):
-        examples = [InputExample(str(i), sentence) for i, sentence in enumerate(batch)]
+        contexts = retriever(batch) if retriever else [""] * len(batch)
+        examples = [InputExample(str(i), sentence, context=ctx) for i, (sentence, ctx) in enumerate(zip(batch, contexts))]
 
         features = convert_examples_to_features(examples, label_list, 64, tokenizer)
 

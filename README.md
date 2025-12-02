@@ -83,3 +83,48 @@ For more information, please visit [www.prosus.com](www.prosus.com).
 ## Contact information
 Please contact Dogu Araci `dogu.araci[at]prosus[dot]com` and Zulkuf Genc `zulkuf.genc[at]prosus[dot]com` about
  any FinBERT related issues and questions.
+
+## Retrieval-augmented setup (RAG prep)
+To ground FinBERT on external financial text (e.g., TRC2), first build a retrieval index:
+
+1) Install deps: `pip install sentence-transformers faiss-cpu`
+2) Run the index builder (parts 0–1):  
+```
+python scripts/build_retrieval_index.py \
+  --input_dir /path/to/trc2/texts \
+  --output_dir data/trc2_index \
+  --model sentence-transformers/all-MiniLM-L6-v2 \
+  --chunk_size 200 --overlap 50 --batch_size 64 --normalize
+```
+
+Outputs:
+- `data/trc2_index/index.faiss` — FAISS vector index
+- `data/trc2_index/chunks.jsonl` — chunk metadata and text
+- `data/trc2_index/embeddings.npy` — (optional) saved embeddings
+- `data/trc2_index/index_meta.json` — settings used for the index
+
+### Enrich labeled data with retrieved context (part 2)
+Add top-k retrieved passages to Financial PhraseBank splits:
+```
+python scripts/enrich_dataset_with_retrieval.py \
+  --input_path data/sentiment_data/train.csv \
+  --output_path data/sentiment_data/train_rag.csv \
+  --index_dir data/trc2_index \
+  --top_k 3 \
+  --model sentence-transformers/all-MiniLM-L6-v2
+```
+Repeat for validation/test. The output appends a `context` column consumed by the model.
+
+### Training/eval with context (parts 3–4)
+- Point training to the enriched files (with context column). `FinSentProcessor` now reads an optional 5th column as context.
+- `convert_examples_to_features` will append `[CLS] sentence [SEP] context [SEP]` within `max_seq_length` (1/3 query, 2/3 context budget heuristic).
+
+### Inference with retrieval (part 5)
+- Provide a `retriever` callable to `finbert.predict` that returns a context string per sentence; otherwise it runs baseline.
+- You can reuse the FAISS index + SentenceTransformer to build a simple retriever (same pattern as `enrich_dataset_with_retrieval.py`).
+- A ready-to-use helper is in `scripts/runtime_retriever.py`:
+```
+from scripts.runtime_retriever import FaissRetriever
+retriever = FaissRetriever(index_dir="data/trc2_index", top_k=3)
+# then pass retriever into finbert.predict(...)
+```

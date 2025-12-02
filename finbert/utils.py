@@ -27,7 +27,7 @@ CONFIG_NAME = 'config.json'
 class InputExample(object):
     """A single training/test example for simple sequence classification."""
 
-    def __init__(self, guid, text, label=None, agree=None):
+    def __init__(self, guid, text, label=None, agree=None, context=None):
         """
         Constructs an InputExample
         Parameters
@@ -40,11 +40,14 @@ class InputExample(object):
             Label for the example.
         agree: str, optional
             For FinBERT , inter-annotator agreement level.
+        context: str, optional
+            Retrieved context to append for RAG-style classification.
         """
         self.guid = guid
         self.text = text
         self.label = label
         self.agree = agree
+        self.context = context or ""
 
 
 class InputFeatures(object):
@@ -92,7 +95,11 @@ class FinSentProcessor(DataProcessor):
         phase: str
             Name of the .csv file to be loaded.
         """
-        return self._create_examples(self._read_tsv(os.path.join(data_dir, (phase + ".csv"))), phase)
+        # Prefer enriched RAG file if present (phase_rag.csv), otherwise fall back to phase.csv
+        rag_path = os.path.join(data_dir, f"{phase}_rag.csv")
+        base_path = os.path.join(data_dir, f"{phase}.csv")
+        target_path = rag_path if os.path.exists(rag_path) else base_path
+        return self._create_examples(self._read_tsv(target_path), phase)
 
     def get_labels(self):
         return ["positive", "negative", "neutral"]
@@ -110,8 +117,13 @@ class FinSentProcessor(DataProcessor):
                 agree = line[3]
             except:
                 agree = None
+            try:
+                # Optional RAG context column if present
+                context = line[4]
+            except:
+                context = ""
             examples.append(
-                InputExample(guid=guid, text=text, label=label, agree=agree))
+                InputExample(guid=guid, text=text, label=label, agree=agree, context=context))
         return examples
 
 
@@ -145,25 +157,35 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
 
     features = []
     for (ex_index, example) in enumerate(examples):
-        tokens = tokenizer.tokenize(example.text)
+        # Tokenize main text
+        query_tokens = tokenizer.tokenize(example.text)
 
-        if len(tokens) > max_seq_length - 2:
-            tokens = tokens[:(max_seq_length // 4) - 1] + tokens[
-                                                          len(tokens) - (3 * max_seq_length // 4) + 1:]
+        # Tokenize optional retrieved context
+        context_tokens = tokenizer.tokenize(example.context) if getattr(example, "context", "") else []
 
-        tokens = ["[CLS]"] + tokens + ["[SEP]"]
+        # Heuristic budget: reserve 1/3 for query, 2/3 for context
+        query_budget = max_seq_length // 3
+        context_budget = max_seq_length - query_budget
 
+        if len(query_tokens) > query_budget - 2:
+            query_tokens = query_tokens[: (query_budget - 2)]
+
+        if len(context_tokens) > context_budget - 1:
+            context_tokens = context_tokens[: (context_budget - 1)]
+
+        tokens = ["[CLS]"] + query_tokens + ["[SEP]"]
         token_type_ids = [0] * len(tokens)
 
-        input_ids = tokenizer.convert_tokens_to_ids(tokens)
+        if context_tokens:
+            tokens += context_tokens + ["[SEP]"]
+            token_type_ids += [1] * (len(context_tokens) + 1)
 
+        input_ids = tokenizer.convert_tokens_to_ids(tokens)
         attention_mask = [1] * len(input_ids)
 
         padding = [0] * (max_seq_length - len(input_ids))
         input_ids += padding
         attention_mask += padding
-
-
         token_type_ids += padding
 
         assert len(input_ids) == max_seq_length
