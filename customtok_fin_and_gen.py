@@ -34,6 +34,7 @@ def train_financial_tokenizer(base_model_name, text_iterator, save_directory, mi
         pieces = tokenizer.tokenize(word)
         if len(pieces) > 1 or (len(pieces) == 1 and pieces[0] == tokenizer.unk_token):
             candidate_tokens.append(word)
+    tokenizer.add_tokens(candidate_tokens)
     tokenizer.save_pretrained(save_directory)
     return tokenizer
 
@@ -41,7 +42,7 @@ def main():
     dataset = load_financial_phrasebank(seed=42)
     financial_text_iterator = iter_financial_text(dataset)
     train_financial_tokenizer(
-        base_model_name="bert-base-uncased",
+        base_model_name="ProsusAI/finbert",
         text_iterator=financial_text_iterator,
         save_directory="finbert_financial_general_tokenizer",
         min_freq=5,
