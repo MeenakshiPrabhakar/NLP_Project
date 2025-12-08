@@ -24,6 +24,7 @@ We used the "sentences_50agree" split of the Financial PhraseBank:
 ## How to Run
 To train the financial-specific tokenizer:
 - run python customtok_fin.py
+
 To train the general financial tokenizer:
 - python customtok_fin_and_gen.py
 
